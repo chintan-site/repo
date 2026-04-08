@@ -1,0 +1,8 @@
+output/
+*.log
+checkpoint.json
+checkpoint.new.json
+.env
+.DS_Store
+__pycache__/
+node_modules/

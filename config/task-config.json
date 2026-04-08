@@ -1,0 +1,11 @@
+{
+  "tasks": {
+    "sync": { "timeout": 1800, "retry": 3 },
+    "process": { "timeout": 2700, "retry": 2 },
+    "cleanup": { "timeout": 600, "retry": 1 }
+  },
+  "global": {
+    "max_concurrent": 1,
+    "minute_budget": 1800
+  }
+}

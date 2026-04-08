@@ -1,0 +1,85 @@
+name: Ephemeral IaaS Worker
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task to execute'
+        required: true
+        type: choice
+        options: [sync, process, cleanup, health-check]
+      priority:
+        description: 'Priority level'
+        required: false
+        default: 'normal'
+        type: choice
+        options: [low, normal, high]
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  repository_dispatch:
+    types: [trigger-task]
+
+permissions:
+  contents: read
+  packages: read
+  # Uncomment for OIDC cloud auth:
+  # id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.task || 'scheduled' }}
+  cancel-in-progress: true
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TASK: ${{ github.event.inputs.task || github.event.client_payload.task || 'sync' }}
+      RUN_ID: ${{ github.run_id }}-${{ github.run_number }}
+      STATE_URL: ${{ secrets.STATE_URL }}
+      RESULTS_URL: ${{ secrets.RESULTS_URL }}
+      MONITORING_WEBHOOK: ${{ secrets.MONITORING_WEBHOOK }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Runtime
+        run: bash scripts/setup.sh
+
+      - name: Load Checkpoint
+        run: |
+          echo "Loading state for task: $TASK"
+          curl -sf "$STATE_URL/checkpoint?task=$TASK" > checkpoint.json 2>/dev/null || \
+            echo '{"version":0,"cursor":null,"last_run":null}' > checkpoint.json
+          cat checkpoint.json
+
+      - name: Execute Task
+        run: bash scripts/execute.sh
+        env:
+          WORKER_TOKEN: ${{ secrets.WORKER_TOKEN }}
+
+      - name: Persist Results
+        if: success()
+        run: bash scripts/persist.sh
+
+      - name: Upload Debug Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-${{ env.RUN_ID }}
+          path: |
+            output/
+            checkpoint.json
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: Cleanup Runner
+        if: always()
+        run: bash scripts/cleanup.sh
+
+      - name: Notify Monitoring
+        if: always()
+        run: |
+          curl -sf -X POST "$MONITORING_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"run_id\":\"${{ env.RUN_ID }}\",\"task\":\"${{ env.TASK }}\",\"status\":\"${{ job.status }}\"}" \
+            || echo "⚠️ Monitoring webhook failed"
